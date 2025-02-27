@@ -3,6 +3,8 @@ import { createServer, type Server } from "http";
 import { setupAuth } from "./auth";
 import { storage } from "./storage";
 import { insertAssignmentSchema, insertSubmissionSchema, insertReviewSchema } from "@shared/schema";
+import { insertCalendarEventSchema, insertCalendarSyncSchema } from "@shared/schema"; // Added import
+
 
 export async function registerRoutes(app: Express): Promise<Server> {
   setupAuth(app);
@@ -147,6 +149,124 @@ export async function registerRoutes(app: Express): Promise<Server> {
       reviewsCount: reviews.length,
       averageRating: reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length || 0
     });
+  });
+
+  // Calendar routes
+  app.get("/api/calendar", async (req, res) => {
+    if (!req.isAuthenticated()) return res.sendStatus(401);
+
+    const [events, timeSlots, syncRequests, syncedPeers] = await Promise.all([
+      storage.getCalendarEventsByUser(req.user.id),
+      storage.getTimeSlotsByUser(req.user.id),
+      storage.getCalendarSyncRequests(req.user.id),
+      storage.getSyncedPeers(req.user.id)
+    ]);
+
+    res.json({
+      events,
+      timeSlots,
+      syncRequests,
+      syncedPeers
+    });
+  });
+
+  app.post("/api/calendar/events", async (req, res) => {
+    if (!req.isAuthenticated()) return res.sendStatus(401);
+
+    const parsed = insertCalendarEventSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json(parsed.error);
+    }
+
+    const event = await storage.createCalendarEvent({
+      ...parsed.data,
+      userId: req.user.id
+    });
+
+    res.status(201).json(event);
+  });
+
+  app.patch("/api/calendar/events/:id", async (req, res) => {
+    if (!req.isAuthenticated()) return res.sendStatus(401);
+
+    const event = await storage.getCalendarEvent(parseInt(req.params.id));
+    if (!event || event.userId !== req.user.id) {
+      return res.status(404).json({ message: "Event not found" });
+    }
+
+    const parsed = insertCalendarEventSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json(parsed.error);
+    }
+
+    const updatedEvent = await storage.updateCalendarEvent(event.id, parsed.data);
+    res.json(updatedEvent);
+  });
+
+  app.delete("/api/calendar/events/:id", async (req, res) => {
+    if (!req.isAuthenticated()) return res.sendStatus(401);
+
+    const event = await storage.getCalendarEvent(parseInt(req.params.id));
+    if (!event || event.userId !== req.user.id) {
+      return res.status(404).json({ message: "Event not found" });
+    }
+
+    await storage.deleteCalendarEvent(event.id);
+    res.sendStatus(200);
+  });
+
+  // Calendar sync routes
+  app.post("/api/calendar/sync-requests", async (req, res) => {
+    if (!req.isAuthenticated()) return res.sendStatus(401);
+
+    const parsed = insertCalendarSyncSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json(parsed.error);
+    }
+
+    const syncRequest = await storage.createCalendarSync({
+      ...parsed.data,
+      fromUserId: req.user.id
+    });
+
+    res.status(201).json(syncRequest);
+  });
+
+  app.patch("/api/calendar/sync-requests/:id", async (req, res) => {
+    if (!req.isAuthenticated()) return res.sendStatus(401);
+
+    const syncRequest = await storage.getCalendarSync(parseInt(req.params.id));
+    if (!syncRequest || syncRequest.toUserId !== req.user.id) {
+      return res.status(404).json({ message: "Sync request not found" });
+    }
+
+    const status = req.body.status;
+    if (status !== "accepted" && status !== "rejected") {
+      return res.status(400).json({ message: "Invalid status" });
+    }
+
+    const updatedSync = await storage.updateCalendarSync(syncRequest.id, { status });
+    res.json(updatedSync);
+  });
+
+  app.delete("/api/calendar/sync/:userId", async (req, res) => {
+    if (!req.isAuthenticated()) return res.sendStatus(401);
+
+    await storage.deleteCalendarSync(req.user.id, parseInt(req.params.userId));
+    res.sendStatus(200);
+  });
+
+  // User search route for sync
+  app.get("/api/users/search", async (req, res) => {
+    if (!req.isAuthenticated()) return res.sendStatus(401);
+
+    const query = req.query.q as string;
+    if (!query) {
+      return res.json([]);
+    }
+
+    const users = await storage.searchUsers(query);
+    res.json(users);
   });
 
   const httpServer = createServer(app);

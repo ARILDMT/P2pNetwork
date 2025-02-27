@@ -4,6 +4,7 @@ import createMemoryStore from "memorystore";
 
 const MemoryStore = createMemoryStore(session);
 
+// Add these methods to the IStorage interface
 export interface IStorage {
   // User operations
   getUser(id: number): Promise<User | undefined>;
@@ -34,8 +35,31 @@ export interface IStorage {
   getPendingReviewsForUser(userId: number): Promise<Submission[]>;
 
   sessionStore: session.Store;
+
+  // Calendar operations
+  getCalendarEventsByUser(userId: number): Promise<CalendarEvent[]>;
+  createCalendarEvent(event: InsertCalendarEvent & { userId: number }): Promise<CalendarEvent>;
+  getCalendarEvent(id: number): Promise<CalendarEvent | undefined>;
+  updateCalendarEvent(id: number, event: Partial<InsertCalendarEvent>): Promise<CalendarEvent>;
+  deleteCalendarEvent(id: number): Promise<void>;
+
+  // Time slots operations
+  getTimeSlotsByUser(userId: number): Promise<TimeSlot[]>;
+  createTimeSlot(slot: InsertTimeSlot & { userId: number }): Promise<TimeSlot>;
+  updateTimeSlot(id: number, slot: Partial<InsertTimeSlot>): Promise<TimeSlot>;
+  deleteTimeSlot(id: number): Promise<void>;
+
+  // Calendar sync operations
+  getCalendarSyncRequests(userId: number): Promise<CalendarSync[]>;
+  createCalendarSync(sync: InsertCalendarSync & { fromUserId: number }): Promise<CalendarSync>;
+  getCalendarSync(id: number): Promise<CalendarSync | undefined>;
+  updateCalendarSync(id: number, sync: { status: string }): Promise<CalendarSync>;
+  deleteCalendarSync(fromUserId: number, toUserId: number): Promise<void>;
+  getSyncedPeers(userId: number): Promise<User[]>;
+  searchUsers(query: string): Promise<User[]>;
 }
 
+//Assuming necessary types are defined elsewhere (CalendarEvent, InsertCalendarEvent etc.)
 export class MemStorage implements IStorage {
   private users: Map<number, User>;
   private assignments: Map<number, Assignment>;
@@ -43,6 +67,9 @@ export class MemStorage implements IStorage {
   private reviews: Map<number, Review>;
   private currentId: number;
   sessionStore: session.Store;
+  private calendarEvents: Map<number, CalendarEvent>;
+  private timeSlots: Map<number, TimeSlot>;
+  private calendarSyncs: Map<number, CalendarSync>;
 
   constructor() {
     this.users = new Map();
@@ -53,6 +80,9 @@ export class MemStorage implements IStorage {
     this.sessionStore = new MemoryStore({
       checkPeriod: 86400000,
     });
+    this.calendarEvents = new Map();
+    this.timeSlots = new Map();
+    this.calendarSyncs = new Map();
   }
 
   async getUser(id: number): Promise<User | undefined> {
@@ -223,6 +253,138 @@ export class MemStorage implements IStorage {
       submission.userId !== userId && // Can't review own submissions
       !reviewedSubmissionIds.has(submission.id) && // Haven't reviewed it yet
       submission.reviewsReceived < submission.reviewsRequired // Still needs reviews
+    );
+  }
+
+  // Calendar Events
+  async getCalendarEventsByUser(userId: number): Promise<CalendarEvent[]> {
+    return Array.from(this.calendarEvents.values()).filter(
+      (event) => event.userId === userId
+    );
+  }
+
+  async createCalendarEvent(insertEvent: InsertCalendarEvent & { userId: number }): Promise<CalendarEvent> {
+    const id = this.currentId++;
+    const event: CalendarEvent = {
+      ...insertEvent,
+      id,
+      createdAt: new Date(),
+    };
+    this.calendarEvents.set(id, event);
+    return event;
+  }
+
+  async getCalendarEvent(id: number): Promise<CalendarEvent | undefined> {
+    return this.calendarEvents.get(id);
+  }
+
+  async updateCalendarEvent(id: number, updateEvent: Partial<InsertCalendarEvent>): Promise<CalendarEvent> {
+    const event = await this.getCalendarEvent(id);
+    if (!event) throw new Error("Event not found");
+
+    const updatedEvent = { ...event, ...updateEvent };
+    this.calendarEvents.set(id, updatedEvent);
+    return updatedEvent;
+  }
+
+  async deleteCalendarEvent(id: number): Promise<void> {
+    this.calendarEvents.delete(id);
+  }
+
+  // Time Slots
+  async getTimeSlotsByUser(userId: number): Promise<TimeSlot[]> {
+    return Array.from(this.timeSlots.values()).filter(
+      (slot) => slot.userId === userId
+    );
+  }
+
+  async createTimeSlot(insertSlot: InsertTimeSlot & { userId: number }): Promise<TimeSlot> {
+    const id = this.currentId++;
+    const slot: TimeSlot = {
+      ...insertSlot,
+      id,
+      createdAt: new Date(),
+    };
+    this.timeSlots.set(id, slot);
+    return slot;
+  }
+
+  async updateTimeSlot(id: number, updateSlot: Partial<InsertTimeSlot>): Promise<TimeSlot> {
+    const slot = this.timeSlots.get(id);
+    if (!slot) throw new Error("Time slot not found");
+
+    const updatedSlot = { ...slot, ...updateSlot };
+    this.timeSlots.set(id, updatedSlot);
+    return updatedSlot;
+  }
+
+  async deleteTimeSlot(id: number): Promise<void> {
+    this.timeSlots.delete(id);
+  }
+
+  // Calendar Sync
+  async getCalendarSyncRequests(userId: number): Promise<CalendarSync[]> {
+    return Array.from(this.calendarSyncs.values()).filter(
+      (sync) => sync.toUserId === userId && sync.status === "pending"
+    );
+  }
+
+  async createCalendarSync(insertSync: InsertCalendarSync & { fromUserId: number }): Promise<CalendarSync> {
+    const id = this.currentId++;
+    const sync: CalendarSync = {
+      ...insertSync,
+      id,
+      status: "pending",
+      createdAt: new Date(),
+    };
+    this.calendarSyncs.set(id, sync);
+    return sync;
+  }
+
+  async getCalendarSync(id: number): Promise<CalendarSync | undefined> {
+    return this.calendarSyncs.get(id);
+  }
+
+  async updateCalendarSync(id: number, updateSync: { status: string }): Promise<CalendarSync> {
+    const sync = await this.getCalendarSync(id);
+    if (!sync) throw new Error("Sync request not found");
+
+    const updatedSync = { ...sync, ...updateSync };
+    this.calendarSyncs.set(id, updatedSync);
+    return updatedSync;
+  }
+
+  async deleteCalendarSync(fromUserId: number, toUserId: number): Promise<void> {
+    for (const [id, sync] of this.calendarSyncs) {
+      if (
+        (sync.fromUserId === fromUserId && sync.toUserId === toUserId) ||
+        (sync.fromUserId === toUserId && sync.toUserId === fromUserId)
+      ) {
+        this.calendarSyncs.delete(id);
+      }
+    }
+  }
+
+  async getSyncedPeers(userId: number): Promise<User[]> {
+    const syncs = Array.from(this.calendarSyncs.values()).filter(
+      (sync) =>
+        (sync.fromUserId === userId || sync.toUserId === userId) &&
+        sync.status === "accepted"
+    );
+
+    const peerIds = syncs.map((sync) =>
+      sync.fromUserId === userId ? sync.toUserId : sync.fromUserId
+    );
+
+    return Promise.all(peerIds.map((id) => this.getUser(id))).then((users) =>
+      users.filter((user): user is User => user !== undefined)
+    );
+  }
+
+  async searchUsers(query: string): Promise<User[]> {
+    const lowercaseQuery = query.toLowerCase();
+    return Array.from(this.users.values()).filter((user) =>
+      user.username.toLowerCase().includes(lowercaseQuery)
     );
   }
 }
