@@ -13,21 +13,21 @@ export interface IStorage {
   updateUserXP(userId: number, xp: number): Promise<User>;
 
   // Assignment operations
-  createAssignment(assignment: InsertAssignment): Promise<Assignment>;
+  createAssignment(assignment: InsertAssignment & { authorId: number }): Promise<Assignment>;
   getAssignment(id: number): Promise<Assignment | undefined>;
   getAssignments(): Promise<Assignment[]>;
   getAssignmentsByCategory(category: string): Promise<Assignment[]>;
   getAssignmentsByDifficulty(difficulty: number): Promise<Assignment[]>;
 
   // Submission operations
-  createSubmission(submission: InsertSubmission): Promise<Submission>;
+  createSubmission(submission: InsertSubmission & { userId: number }): Promise<Submission>;
   getSubmission(id: number): Promise<Submission | undefined>;
   getSubmissionsByAssignment(assignmentId: number): Promise<Submission[]>;
   getSubmissionsByUser(userId: number): Promise<Submission[]>;
   updateSubmissionStatus(submissionId: number, status: string): Promise<Submission>;
 
   // Review operations
-  createReview(review: InsertReview): Promise<Review>;
+  createReview(review: InsertReview & { reviewerId: number }): Promise<Review>;
   getReview(id: number): Promise<Review | undefined>;
   getReviewsBySubmission(submissionId: number): Promise<Review[]>;
   getReviewsByReviewer(reviewerId: number): Promise<Review[]>;
@@ -101,7 +101,7 @@ export class MemStorage implements IStorage {
     return user;
   }
 
-  async createAssignment(insertAssignment: InsertAssignment): Promise<Assignment> {
+  async createAssignment(insertAssignment: InsertAssignment & { authorId: number }): Promise<Assignment> {
     const id = this.currentId++;
     const assignment: Assignment = {
       ...insertAssignment,
@@ -134,12 +134,11 @@ export class MemStorage implements IStorage {
     );
   }
 
-  async createSubmission(insertSubmission: InsertSubmission): Promise<Submission> {
+  async createSubmission(insertSubmission: InsertSubmission & { userId: number }): Promise<Submission> {
     const id = this.currentId++;
     const submission: Submission = {
       ...insertSubmission,
       id,
-      userId: 0, // Will be set by the route handler
       status: "pending",
       reviewsReceived: 0,
       reviewsRequired: 3,
@@ -175,7 +174,7 @@ export class MemStorage implements IStorage {
     return submission;
   }
 
-  async createReview(insertReview: InsertReview): Promise<Review> {
+  async createReview(insertReview: InsertReview & { reviewerId: number }): Promise<Review> {
     const id = this.currentId++;
     const review: Review = {
       ...insertReview,
