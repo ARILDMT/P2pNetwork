@@ -9,24 +9,30 @@ export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
-  
+  updateUserPoints(userId: number, points: number): Promise<User>;
+  updateUserXP(userId: number, xp: number): Promise<User>;
+
   // Assignment operations
   createAssignment(assignment: InsertAssignment): Promise<Assignment>;
   getAssignment(id: number): Promise<Assignment | undefined>;
   getAssignments(): Promise<Assignment[]>;
   getAssignmentsByCategory(category: string): Promise<Assignment[]>;
-  
+  getAssignmentsByDifficulty(difficulty: number): Promise<Assignment[]>;
+
   // Submission operations
   createSubmission(submission: InsertSubmission): Promise<Submission>;
   getSubmission(id: number): Promise<Submission | undefined>;
   getSubmissionsByAssignment(assignmentId: number): Promise<Submission[]>;
   getSubmissionsByUser(userId: number): Promise<Submission[]>;
-  
+  updateSubmissionStatus(submissionId: number, status: string): Promise<Submission>;
+
   // Review operations
   createReview(review: InsertReview): Promise<Review>;
   getReview(id: number): Promise<Review | undefined>;
   getReviewsBySubmission(submissionId: number): Promise<Review[]>;
-  
+  getReviewsByReviewer(reviewerId: number): Promise<Review[]>;
+  getPendingReviewsForUser(userId: number): Promise<Submission[]>;
+
   sessionStore: session.Store;
 }
 
@@ -65,9 +71,33 @@ export class MemStorage implements IStorage {
       ...insertUser,
       id,
       bio: insertUser.bio || null,
-      role: insertUser.role || "student"
+      role: insertUser.role || "student",
+      prpPoints: 0,
+      skillLevel: 1,
+      totalXp: 0,
+      createdAt: new Date()
     };
     this.users.set(id, user);
+    return user;
+  }
+
+  async updateUserPoints(userId: number, points: number): Promise<User> {
+    const user = await this.getUser(userId);
+    if (!user) throw new Error("User not found");
+
+    user.prpPoints += points;
+    this.users.set(userId, user);
+    return user;
+  }
+
+  async updateUserXP(userId: number, xp: number): Promise<User> {
+    const user = await this.getUser(userId);
+    if (!user) throw new Error("User not found");
+
+    user.totalXp += xp;
+    // Level up logic: every 1000 XP is a new level
+    user.skillLevel = Math.floor(user.totalXp / 1000) + 1;
+    this.users.set(userId, user);
     return user;
   }
 
@@ -76,6 +106,8 @@ export class MemStorage implements IStorage {
     const assignment: Assignment = {
       ...insertAssignment,
       id,
+      requiredReviews: 3,
+      autoVerificationEnabled: true,
       createdAt: new Date(),
     };
     this.assignments.set(id, assignment);
@@ -96,12 +128,22 @@ export class MemStorage implements IStorage {
     );
   }
 
+  async getAssignmentsByDifficulty(difficulty: number): Promise<Assignment[]> {
+    return Array.from(this.assignments.values()).filter(
+      (assignment) => assignment.difficulty === difficulty,
+    );
+  }
+
   async createSubmission(insertSubmission: InsertSubmission): Promise<Submission> {
     const id = this.currentId++;
     const submission: Submission = {
       ...insertSubmission,
       id,
+      userId: 0, // Will be set by the route handler
       status: "pending",
+      reviewsReceived: 0,
+      reviewsRequired: 3,
+      autoVerificationStatus: null,
       submittedAt: new Date(),
     };
     this.submissions.set(id, submission);
@@ -124,14 +166,36 @@ export class MemStorage implements IStorage {
     );
   }
 
+  async updateSubmissionStatus(submissionId: number, status: string): Promise<Submission> {
+    const submission = await this.getSubmission(submissionId);
+    if (!submission) throw new Error("Submission not found");
+
+    submission.status = status;
+    this.submissions.set(submissionId, submission);
+    return submission;
+  }
+
   async createReview(insertReview: InsertReview): Promise<Review> {
     const id = this.currentId++;
     const review: Review = {
       ...insertReview,
       id,
+      qualityFlag: "basic",
+      pointsAwarded: 10, // Default points for basic review
       createdAt: new Date(),
     };
     this.reviews.set(id, review);
+
+    // Update submission review count
+    const submission = await this.getSubmission(review.submissionId);
+    if (submission) {
+      submission.reviewsReceived += 1;
+      if (submission.reviewsReceived >= submission.reviewsRequired) {
+        submission.status = "completed";
+      }
+      this.submissions.set(submission.id, submission);
+    }
+
     return review;
   }
 
@@ -142,6 +206,24 @@ export class MemStorage implements IStorage {
   async getReviewsBySubmission(submissionId: number): Promise<Review[]> {
     return Array.from(this.reviews.values()).filter(
       (review) => review.submissionId === submissionId,
+    );
+  }
+
+  async getReviewsByReviewer(reviewerId: number): Promise<Review[]> {
+    return Array.from(this.reviews.values()).filter(
+      (review) => review.reviewerId === reviewerId,
+    );
+  }
+
+  async getPendingReviewsForUser(userId: number): Promise<Submission[]> {
+    const userReviews = await this.getReviewsByReviewer(userId);
+    const reviewedSubmissionIds = new Set(userReviews.map(r => r.submissionId));
+
+    return Array.from(this.submissions.values()).filter(submission => 
+      submission.status === "pending" &&
+      submission.userId !== userId && // Can't review own submissions
+      !reviewedSubmissionIds.has(submission.id) && // Haven't reviewed it yet
+      submission.reviewsReceived < submission.reviewsRequired // Still needs reviews
     );
   }
 }
